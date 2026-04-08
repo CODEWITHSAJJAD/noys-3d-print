@@ -8,6 +8,8 @@ const apiClient = axios.create({
   },
 });
 
+console.log('API Client baseURL:', process.env.NEXT_PUBLIC_API_URL);
+
 apiClient.interceptors.request.use(
   (config) => {
     const token = Cookies.get('jwt_token') || localStorage.getItem('jwt_token');
