@@ -5,72 +5,106 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useToast } from '@/lib/toast/ToastContext';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { CreditCard, CheckCircle2, ShieldCheck, ArrowLeft } from 'lucide-react';
+import { CreditCard, CheckCircle2, ShieldCheck, ArrowLeft, Loader2 } from 'lucide-react';
+import apiClient from '@/lib/api/client';
+import { useAuth } from '@/lib/auth/useAuth';
 
 function PaymentGatewayContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { error } = useToast();
+  const { error, success } = useToast();
+  const { isAuthenticated } = useAuth();
   
   const type = searchParams.get('type');
   const idStr = searchParams.get('id');
+  const status = searchParams.get('status');
+  const sessionId = searchParams.get('session_id');
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [orderName, setOrderName] = useState('Digital Purchase');
   const [orderPrice, setOrderPrice] = useState('£0.00');
+  const [itemId, setItemId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (status === 'success') {
+      setIsSuccess(true);
+      success('Payment completed successfully!');
+      setTimeout(() => {
+        router.push('/profile');
+      }, 3000);
+      return;
+    }
+    
+    if (status === 'cancelled') {
+      error('Payment was cancelled. Please try again.');
+      router.push('/pricing');
+      return;
+    }
+  }, [status, router, error, success]);
 
-    if (type === 'subscription') {
-      const plans: Record<string, { name: string, price: string }> = {
-        'starter': { name: 'Starter Plan', price: 'Free' },
-        'bronze': { name: 'Bronze Plan', price: '£5.00/mo' },
-        'silver': { name: 'Silver Plan', price: '£9.99/mo' },
-        'gold': { name: 'Gold Plan', price: '£14.99/mo' },
-      };
-      if (idStr && plans[idStr]) {
-        setOrderName(plans[idStr].name);
-        setOrderPrice(plans[idStr].price);
+  useEffect(() => {
+    const fetchItemDetails = async () => {
+      try {
+        if (type === 'subscription') {
+          const response = await apiClient.get(`/plans/${idStr}`);
+          if (response.data) {
+            setOrderName(response.data.name);
+            setOrderPrice(`£${response.data.price}/mo`);
+            setItemId(idStr);
+          }
+        } else if (type === 'credits') {
+          const response = await apiClient.get(`/credit-packs/${idStr}`);
+          if (response.data) {
+            setOrderName(`${response.data.credits} AI Credits`);
+            setOrderPrice(`£${response.data.price}`);
+            setItemId(idStr);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch item details:', err);
       }
-    } else if (type === 'credits') {
-      const packs: Record<string, { name: string, price: string }> = {
-        '10-credits': { name: '10 AI Credits', price: '£2.99' },
-        '25-credits': { name: '25 AI Credits', price: '£5.99' },
-        '50-credits': { name: '50 AI Credits', price: '£9.99' },
-        '100-credits': { name: '100 AI Credits', price: '£17.99' },
-        '150-credits': { name: '150 AI Credits', price: '£24.99' },
-        '200-credits': { name: '200 AI Credits', price: '£29.99' },
-      };
-      if (idStr && packs[idStr]) {
-        setOrderName(packs[idStr].name);
-        setOrderPrice(packs[idStr].price);
-      }
+    };
+    
+    if (type && idStr) {
+      fetchItemDetails();
     }
   }, [type, idStr]);
 
-  const handlePlaceOrder = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubscribe = async () => {
+    if (!isAuthenticated) {
+      router.push('/login?redirect=/payment?type=subscription&id=' + idStr);
+      return;
+    }
+    
     setIsProcessing(true);
-
+    
     try {
-      console.log(`POST /payments/${type} -> { id: ${idStr} }`);
-
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      setIsSuccess(true);
-
-      setTimeout(() => {
+      const response = await apiClient.post('/payments/checkout', {
+        type: type,
+        item_id: idStr,
+        success_url: window.location.origin + '/payment',
+        cancel_url: window.location.origin + '/payment'
+      });
+      
+      if (response.data.checkout_url) {
+        window.location.href = response.data.checkout_url;
+      } else if (response.data.status === 'completed') {
+        setIsSuccess(true);
+        success('Purchase completed!');
+        setTimeout(() => {
           router.push('/profile');
-      }, 3000);
-    } catch (err) {
-      console.error('Payment failed', err);
-      error('Payment failed to process. Please try again.');
+        }, 2000);
+      } else {
+        throw new Error(response.data.error || 'Payment failed');
+      }
+    } catch (err: any) {
+      console.error('Payment error:', err);
+      error(err.response?.data?.error || err.message || 'Payment failed. Please try again.');
     } finally {
       setIsProcessing(false);
     }
   };
-
-  const inputClass = "w-full px-4 py-3 rounded-xl border border-gray-300 text-blue-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white";
 
   if (isSuccess) {
     return (
@@ -89,108 +123,78 @@ function PaymentGatewayContent() {
   return (
     <div className="min-h-[calc(100vh-64px)] p-8 max-w-5xl mx-auto pt-24 relative">
       
-      <button onClick={() => router.back()} className="flex items-center gap-2 text-blue-500 font-bold hover:text-orange-500 transition-colors mb-6 absolute top-24 left-8">
+      <button onClick={() => router.push('/pricing')} className="flex items-center gap-2 text-blue-500 font-bold hover:text-orange-500 transition-colors mb-6 absolute top-24 left-8">
           <ArrowLeft size={18} /> Back to Pricing
       </button>
 
       <h1 className="text-4xl sm:text-5xl font-black text-[#0c2a50] mb-8 drop-shadow-sm text-center md:text-left mt-10 md:mt-0">Secure Checkout</h1>
       
-      <form onSubmit={handlePlaceOrder} className="flex flex-col lg:flex-row gap-8">
+      <div className="flex flex-col lg:flex-row gap-8">
         
-        {}
         <div className="flex-1 space-y-8">
           
           <Card className="shadow-xl border-t-8 border-t-blue-500">
             <CardContent className="p-6 sm:p-8 bg-gradient-to-br from-white to-sky-50/50">
               <h2 className="text-2xl font-black text-[#0c2a50] mb-6 flex items-center gap-3">
                 <ShieldCheck className="text-blue-500" size={28} />
-                Payment Method
+                Order Summary
               </h2>
               
-              <div className="bg-blue-50/80 p-6 rounded-2xl border-2 border-blue-200 mb-8 flex items-center gap-4 shadow-inner">
+              <div className="bg-blue-50/80 p-6 rounded-2xl border-2 border-blue-200 flex items-center gap-4 shadow-inner">
                 <CreditCard className="text-blue-500 shrink-0" size={36} />
                 <div>
-                  <h4 className="font-black text-[#0a2342] text-lg">Mock Bank Transfer</h4>
-                  <p className="text-sm font-semibold text-blue-600">Enter dummy card metrics to test integration flow.</p>
+                  <h4 className="font-black text-[#0a2342] text-lg">{orderName}</h4>
+                  <p className="text-sm font-semibold text-blue-600">{orderPrice}</p>
                 </div>
               </div>
 
-              <div className="space-y-5">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-bold text-[#1a4073]">Card Number</label>
-                  <input required type="text" maxLength={19} className={inputClass} placeholder="0000 0000 0000 0000" />
-                </div>
-                
-                <div className="space-y-1.5">
-                  <label className="text-sm font-bold text-[#1a4073]">Cardholder Name</label>
-                  <input required type="text" className={inputClass} placeholder="JOHN DOE" />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-bold text-[#1a4073]">Expiry Date</label>
-                    <input required type="text" maxLength={5} className={inputClass} placeholder="MM/YY" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-bold text-[#1a4073]">CVV</label>
-                    <input required type="text" maxLength={4} className={inputClass} placeholder="123" />
-                  </div>
-                </div>
+              <div className="mt-6 pt-6 border-t-2 border-blue-100">
+                <p className="text-sm font-bold text-gray-500">
+                  You will be redirected to Stripe for secure payment.
+                </p>
               </div>
             </CardContent>
           </Card>
-
         </div>
 
-        {}
-        <div className="w-full lg:w-96">
-          <Card className="sticky top-24 border-[#cc6200] shadow-[8px_8px_0px_#cc6200] border-2">
-            <CardContent className="p-6 sm:p-8 bg-gradient-to-b from-orange-50 to-white flex flex-col min-h-[400px]">
-              <h2 className="text-2xl font-black text-[#0c2a50] mb-6 pb-4 border-b-2 border-orange-200">Current Order</h2>
+        <div className="lg:w-80">
+          <Card className="shadow-xl border-t-8 border-t-orange-500 sticky top-24">
+            <CardContent className="p-6 bg-gradient-to-br from-white to-orange-50/50">
+              <h3 className="text-xl font-black text-[#0c2a50] mb-4">Total</h3>
+              <p className="text-4xl font-black text-[#0c2a50] mb-6">{orderPrice}</p>
               
-              <div className="mb-auto">
-                <h3 className="text-xl font-bold text-[#1a4073] mb-2">Item Selected:</h3>
-                <div className="p-4 bg-white rounded-xl border border-orange-100 shadow-sm mb-4">
-                  <p className="text-lg font-black text-orange-600">{orderName}</p>
-                </div>
-                
-                <div className="flex justify-between items-center text-sm font-bold text-gray-500">
-                  <span>Subtotal</span>
-                  <span>{orderPrice}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm font-bold text-gray-500 mt-2">
-                  <span>VAT (20%)</span>
-                  <span>Included</span>
-                </div>
-              </div>
-
-              <div className="flex justify-between items-center text-3xl font-black text-[#0a2342] mb-8 pt-4 border-t-2 border-orange-200 mt-8">
-                <span>Total</span>
-                <span className="text-orange-600">{orderPrice}</span>
-              </div>
-
-              <Button 
-                type="submit" 
-                variant="primary" 
-                className="w-full h-14 text-lg font-black uppercase tracking-wider"
-                isLoading={isProcessing}
+              <Button
+                onClick={handleSubscribe}
+                disabled={isProcessing || !itemId}
+                className="w-full"
+                size="lg"
               >
-                {isProcessing ? 'Authorizing...' : 'Pay Now'}
+                {isProcessing ? (
+                  <>
+                    <Loader2 className="animate-spin mr-2" size={20} />
+                    Processing...
+                  </>
+                ) : (
+                  'Pay Now'
+                )}
               </Button>
+              
+              <p className="text-xs text-gray-500 text-center mt-4 font-semibold">
+                Secure payment powered by Stripe
+              </p>
             </CardContent>
           </Card>
         </div>
-
-      </form>
+      </div>
     </div>
   );
 }
 
-export default function PaymentGatewayPage() {
+export default function PaymentPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-pulse text-blue-500 font-bold text-xl">Loading secure checkout...</div>
+      <div className="min-h-screen flex items-center justify-center pt-24">
+        <Loader2 className="animate-spin text-blue-500" size={40} />
       </div>
     }>
       <PaymentGatewayContent />
